@@ -1,9 +1,13 @@
-"""Lectura de CFDI 3.3 / 4.0.
+"""Lectura de CFDI 3.3 / 4.0 y utilidades de normalización de conceptos y proveedores.
 
 Reglas:
 - `Total` ya incluye IVA y retenciones: NO se suman impuestos.
 - Sin regex "adivinadora": un XML inválido o sin timbrar se rechaza con
   `CfdiParseError` (un UUID inventado rompería la detección de duplicados).
+- Resumen de conceptos: sin unidades 'NA'/'ACT'/'H87', máximo 2 partidas y 'Y OTROS',
+  con límite estricto de ~80 caracteres y corte en límite de palabra.
+- Alias de proveedor: corte en límite de palabra y sin preposiciones finales
+  (ej. 'DE LA TORRE MATERIALES PARA CONSTRUCCION' -> 'DE LA TORRE MATERIALES').
 """
 import re
 import xml.etree.ElementTree as ET
@@ -15,9 +19,31 @@ from typing import Any, Dict, List, Optional
 from app.types import money
 
 UUID_RE = re.compile(r"^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$")
-MAX_CONCEPTO = 120
+MAX_CONCEPTO = 80
 
 LIMITE_TRANSFERENCIA = Decimal("2000.00")
+
+UNIDADES_IGNORADAS = {"NA", "N/A", "ACT", "H87"}
+PREPOSICIONES = {
+    "A", "AL", "DE", "DEL", "LA", "LAS", "EL", "LOS", "EN",
+    "PARA", "POR", "CON", "SIN", "SOBRE", "HACIA", "DESDE", "HASTA", "ENTRE", "Y", "E", "O", "U"
+}
+
+SUFIJOS_SOCIEDAD = [
+    r"\bS\.?A\.?\s+DE\s+C\.?V\.?\b",
+    r"\bS\.?A\.?P\.?I\.?\s+DE\s+C\.?V\.?\b",
+    r"\bS\.?\s*DE\s+R\.?L\.?\s+DE\s+C\.?V\.?\b",
+    r"\bS\.?A\.?\b",
+    r"\bS\.?C\.?\b",
+    r"\bS\.?A\.?S\.?\b",
+    r"\bS\.?C\.?P\.?\b",
+    r"\bS\.?N\.?C\.?\b",
+    r"\bS\.?E\.?N\.?C\.?\b",
+    r"\bS\.?P\.?R\.?\s+DE\s+R\.?L\.?\b",
+    r"\bSOCIEDAD\s+ANONIMA\s+DE\s+CAPITAL\s+VARIABLE\b",
+    r"\bSOCIEDAD\s+DE\s+RESPONSABILIDAD\s+LIMITADA\b",
+    r"\bSOCIEDAD\s+CIVIL\b",
+]
 
 
 class CfdiParseError(ValueError):
@@ -92,17 +118,104 @@ def _cantidad_txt(raw: str) -> str:
 
 
 def resumir_concepto(conceptos: List[Dict[str, str]], limite: int = MAX_CONCEPTO) -> str:
-    """'cantidad unidad descripcion' por concepto, unidos con '; ', máx. `limite`."""
-    partes = []
+    """Resume los conceptos de la factura:
+    - Sin unidades genéricas 'NA', 'ACT', 'H87'.
+    - Máximo 2 partidas y agrega ' Y OTROS' si hay más.
+    - Respeta límite de caracteres (~80), cortando en límite de palabra
+      sin dejar preposiciones ni signos huérfanos al final.
+    """
+    items: List[str] = []
     for c in conceptos:
-        txt = " ".join(p for p in (_cantidad_txt(c["cantidad"]) if c["cantidad"] else "", c["unidad"], c["descripcion"]) if p)
-        txt = re.sub(r"\s+", " ", txt).strip()
+        cant = _cantidad_txt(c.get("cantidad", "")) if c.get("cantidad") else ""
+        uni = (c.get("unidad") or "").strip()
+        if uni.upper() in UNIDADES_IGNORADAS:
+            uni = ""
+        desc = (c.get("descripcion") or "").strip()
+        tokens = [p for p in (cant, uni, desc) if p]
+        txt = re.sub(r"\s+", " ", " ".join(tokens)).strip()
         if txt:
-            partes.append(txt)
-    resumen = "; ".join(partes) or "Materiales / Servicios"
-    if len(resumen) > limite:
-        resumen = resumen[: limite - 3].rstrip() + "..."
-    return resumen
+            items.append(txt)
+
+    if not items:
+        return "Materiales / Servicios"
+
+    if len(items) <= 2:
+        texto_base = ", ".join(items)
+        sufijo = ""
+    else:
+        texto_base = ", ".join(items[:2])
+        sufijo = " Y OTROS"
+
+    candidato = f"{texto_base}{sufijo}"
+    if len(candidato) <= limite:
+        return candidato
+
+    # Si excede el límite, truncar en límite de palabra reservando espacio para el sufijo
+    max_base = limite - len(sufijo)
+    palabras = texto_base.split()
+    res: List[str] = []
+    curr_len = 0
+    for p in palabras:
+        adicional = len(p) if not res else (len(p) + 1)
+        if curr_len + adicional <= max_base:
+            res.append(p)
+            curr_len += adicional
+        else:
+            break
+
+    # Evitar terminar en preposiciones o puntuación
+    while res and (res[-1].rstrip(",.;").upper() in PREPOSICIONES or res[-1] in {",", ";", "-"}):
+        res.pop()
+
+    texto_truncado = " ".join(res).rstrip(",.; ")
+    return f"{texto_truncado}{sufijo}"
+
+
+def sugerir_alias(razon_social: str, max_len: int = 32) -> str:
+    """Genera una sugerencia de alias comercial memorable a partir de la razón social.
+
+    Reglas:
+    - Elimina regímenes societarios (S.A. DE C.V., S. DE R.L., etc.).
+    - Trunca en límite de palabra si excede ~32 caracteres.
+    - Nunca termina en preposición ni conjunción (ej. PARA, DE, Y).
+    Ejemplo: 'DE LA TORRE MATERIALES PARA CONSTRUCCION' -> 'DE LA TORRE MATERIALES'
+    """
+    if not razon_social:
+        return ""
+
+    limpio = razon_social.strip()
+
+    for suf in SUFIJOS_SOCIEDAD:
+        limpio = re.sub(suf, "", limpio, flags=re.IGNORECASE)
+
+    # Limpiar puntuación sobrante y espacios repetidos
+    limpio = re.sub(r"[,.;:\-_]+$", "", limpio).strip()
+    limpio = re.sub(r"\s+", " ", limpio).strip()
+
+    if len(limpio) <= max_len:
+        palabras = limpio.split()
+        while palabras and palabras[-1].upper() in PREPOSICIONES:
+            palabras.pop()
+        return " ".join(palabras).rstrip(",.; ") or limpio
+
+    # Truncar en límite de palabra sin partir palabras
+    palabras = limpio.split()
+    seleccionadas: List[str] = []
+    curr_len = 0
+    for p in palabras:
+        adicional = len(p) if not seleccionadas else (len(p) + 1)
+        if curr_len + adicional <= max_len:
+            seleccionadas.append(p)
+            curr_len += adicional
+        else:
+            break
+
+    # Evitar terminar en preposición o conjunción
+    while seleccionadas and seleccionadas[-1].upper() in PREPOSICIONES:
+        seleccionadas.pop()
+
+    resultado = " ".join(seleccionadas).rstrip(",.; ")
+    return resultado or limpio[:max_len].strip()
 
 
 def extract_cfdi_xml(xml_bytes: bytes) -> CfdiData:

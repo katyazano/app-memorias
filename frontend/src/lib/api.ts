@@ -95,8 +95,8 @@ async function request<T>(endpoint: string, options: RequestInit = {}, accionDes
   }
 
   if (!response.ok) {
-    const prefijo = accionDescriptiva ? `No se pudo ${accionDescriptiva}: ` : ''
     let errorDetail = `Error ${response.status}: ${response.statusText}`
+    let technicalDetails = ''
 
     try {
       const errJson = await response.json()
@@ -108,14 +108,32 @@ async function request<T>(endpoint: string, options: RequestInit = {}, accionDes
           const mensajes = errJson.detail.map(traducirErrorValidacion)
           errorDetail = mensajes.join(' · ')
         } else if (typeof errJson.detail === 'object') {
-          errorDetail = errJson.detail.mensaje || JSON.stringify(errJson.detail)
+          errorDetail = errJson.detail.mensaje || errJson.detail.detail || JSON.stringify(errJson.detail)
+          technicalDetails = errJson.detail.detalles_tecnicos || errJson.detail.detalles || ''
         }
+      }
+      if (errJson.detalles_tecnicos) {
+        technicalDetails = errJson.detalles_tecnicos
       }
     } catch {
       // Usar statusText
     }
 
-    throw new Error(`${prefijo}${errorDetail}`)
+    if (response.status === 500) {
+      if (
+        errorDetail.includes('500') ||
+        errorDetail.includes('Internal Server Error') ||
+        errorDetail.includes('Error interno')
+      ) {
+        errorDetail = 'No se pudo guardar la factura. Los detalles técnicos se guardaron en el registro.'
+      }
+    }
+
+    const prefijo = accionDescriptiva && response.status !== 500 ? `No se pudo ${accionDescriptiva}: ` : ''
+    const err = new Error(`${prefijo}${errorDetail}`) as any
+    err.status = response.status
+    err.detallesTecnicos = technicalDetails
+    throw err
   }
 
   if (response.status === 204) {
@@ -261,11 +279,34 @@ export const api = {
     request<Memoria>(`/memorias/${id}`, {}, 'cargar el detalle de la memoria'),
   cerrarMemoria: (id: number) =>
     request<Memoria>(`/memorias/${id}/cerrar`, { method: 'POST' }, 'cerrar la memoria'),
+  reabrirMemoria: (id: number) =>
+    request<Memoria>(`/memorias/${id}/reabrir`, { method: 'POST' }, 'reabrir la memoria'),
   descargarPdf: async (memoriaId: number) => {
     const res = await fetch(`${BASE_URL}/memorias/${memoriaId}/pdf`);
     if (!res.ok) {
-      const err = await res.json().catch(() => null);
-      throw new Error(err?.detail || 'Error al generar el PDF en el servidor.');
+      const errData = await res.json().catch(() => null);
+      let mensaje = 'Error al generar el PDF en el servidor.';
+      let codigo = 'error_desconocido';
+      let rutasProbadas: string[] | undefined = undefined;
+      let navegador: string | undefined = undefined;
+
+      if (errData?.detail) {
+        if (typeof errData.detail === 'string') {
+          mensaje = errData.detail;
+        } else if (typeof errData.detail === 'object') {
+          mensaje = errData.detail.mensaje || errData.detail.detail || mensaje;
+          codigo = errData.detail.codigo || codigo;
+          rutasProbadas = errData.detail.rutas_probadas;
+          navegador = errData.detail.navegador;
+        }
+      }
+
+      const err: any = new Error(mensaje);
+      err.codigo = codigo;
+      err.rutasProbadas = rutasProbadas;
+      err.navegador = navegador;
+      err.memoriaId = memoriaId;
+      throw err;
     }
     const blob = await res.blob();
     const disposition = res.headers.get('Content-Disposition');
@@ -356,7 +397,26 @@ export const api = {
       'restablecer datos del sistema'
     ),
 
+  // Ciclo de vida: Heartbeat y Apagado
+  enviarHeartbeat: async () => {
+    try {
+      await fetch('/api/sistema/heartbeat', { method: 'POST' })
+    } catch {
+      // Ignorar fallos de red puntuales en heartbeat
+    }
+  },
+  apagarSistema: async () => {
+    const res = await fetch('/api/sistema/apagar', { method: 'POST' })
+    if (!res.ok) {
+      throw new Error(`Error ${res.status} al apagar el sistema`)
+    }
+    return res.json() as Promise<{ status: string; mensaje: string }>
+  },
+
   // Estado del sistema y versiones
+  abrirCarpetaLogs: () =>
+    request<{ status: string; ruta: string }>('/sistema/abrir-logs', { method: 'POST' }),
+
   getHealth: async () => {
     const res = await fetch('/health');
     if (!res.ok) {

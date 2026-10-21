@@ -34,8 +34,8 @@ def format_tamano_bytes(b: int) -> str:
 
 
 def get_carpeta_respaldos_default() -> Path:
-    """Retorna la carpeta de respaldos por defecto dentro de data/respaldos."""
-    p = config.DATA_DIR / "respaldos"
+    """Retorna la carpeta de respaldos por defecto."""
+    p = config.BACKUPS_DEFAULT_DIR
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -132,8 +132,11 @@ def crear_respaldo_seguro(db: Optional[Session] = None, origen: str = "manual") 
                         full_p = Path(root) / f
                         if "_staging" in full_p.parts:
                             continue
-                        rel_p = full_p.relative_to(config.DATA_DIR)
-                        zf.write(full_p, arcname=f"data/{rel_p.as_posix()}")
+                        try:
+                            rel_p = full_p.relative_to(config.STORAGE_DIR)
+                            zf.write(full_p, arcname=f"storage/{rel_p.as_posix()}")
+                        except Exception as e:
+                            logger.warning(f"No se pudo empaquetar archivo {full_p}: {e}")
 
         logger.info(f"Respaldo generado exitosamente: {destino_zip}")
 
@@ -238,24 +241,34 @@ def restaurar_respaldo(db: Session, nombre_archivo: str) -> Dict[str, Any]:
     from app.database import engine
     engine.dispose()
 
-    # 3. Extraer sobre data/
+    # 3. Extraer archivos restaurados
     with zipfile.ZipFile(zip_path, "r") as zf:
         for member in zf.infolist():
-            # Solo permitir archivos que empiecen con data/
             arc_name = member.filename
-            if arc_name.startswith("data/"):
+            if arc_name.startswith("storage/"):
+                rel_path = arc_name[len("storage/"):]
+                if not rel_path:
+                    continue
+                target_path = config.STORAGE_DIR / rel_path
+            elif arc_name.startswith("data/storage/"):
+                rel_path = arc_name[len("data/storage/"):]
+                if not rel_path:
+                    continue
+                target_path = config.STORAGE_DIR / rel_path
+            elif arc_name in ("data/app.db", "app.db"):
+                target_path = config.DB_PATH
+            elif arc_name.startswith("data/"):
                 rel_path = arc_name[len("data/"):]
                 if not rel_path:
                     continue
                 target_path = config.DATA_DIR / rel_path
-                if member.is_dir():
-                    target_path.mkdir(parents=True, exist_ok=True)
-                else:
-                    target_path.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(member) as source, open(target_path, "wb") as target:
-                        shutil.copyfileobj(source, target)
-            elif arc_name == "app.db":
-                target_path = config.DB_PATH
+            else:
+                continue
+
+            if member.is_dir():
+                target_path.mkdir(parents=True, exist_ok=True)
+            else:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(member) as source, open(target_path, "wb") as target:
                     shutil.copyfileobj(source, target)
 

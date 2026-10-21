@@ -8,6 +8,15 @@ import { api } from '@/lib/api'
 import { FRONTEND_BUILD_VERSION } from '@/version'
 
 export const AppLayout: React.FC = () => {
+  // Latido continuo mientras el usuario tenga abierta la aplicación (cada 30s)
+  React.useEffect(() => {
+    api.enviarHeartbeat()
+    const timer = setInterval(() => {
+      api.enviarHeartbeat()
+    }, 30000)
+    return () => clearInterval(timer)
+  }, [])
+
   const { data: healthData } = useQuery({
     queryKey: ['health'],
     queryFn: () => api.getHealth(),

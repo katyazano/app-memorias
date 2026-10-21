@@ -1,7 +1,11 @@
 """Router para recepción, parseo, revisión, confirmación y descarga de facturas (CFDI XML + PDF)."""
+import logging
 import re
+import traceback
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger("app.facturas")
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
@@ -23,7 +27,7 @@ from app.schemas import (
 )
 from app.services.parser_service import extract_text_from_pdf_bytes
 from app.services.storage import abs_path, commit_staged_file, new_staging_dir, staging_dir
-from app.services.xml_parser import CfdiParseError, extract_cfdi_xml
+from app.services.xml_parser import CfdiParseError, extract_cfdi_xml, sugerir_alias
 
 router = APIRouter(tags=["Facturas"])
 
@@ -158,11 +162,16 @@ async def subir_facturas(
 
         # F) Información sugerida de proveedor y gasto
         prov_existente = db.query(Proveedor).filter(Proveedor.rfc == cfdi.rfc_emisor).first()
+        alias_calculado = (
+            prov_existente.alias
+            if prov_existente and prov_existente.alias
+            else sugerir_alias(cfdi.nombre_emisor)
+        )
         prov_sugerido = ProveedorSugerido(
             rfc=cfdi.rfc_emisor,
             razon_social=cfdi.nombre_emisor,
             existente_id=prov_existente.id if prov_existente else None,
-            alias=prov_existente.alias if prov_existente else None,
+            alias=alias_calculado,
         )
 
         sug_gasto = SugeridoGasto(
@@ -170,7 +179,7 @@ async def subir_facturas(
             concepto_resumido=cfdi.concepto_sugerido,
             comprobante=cfdi.comprobante,
             metodo_pago=cfdi.metodo_pago_sugerido,
-            proveedor_alias=prov_existente.alias if prov_existente else None,
+            proveedor_alias=alias_calculado,
             requiere_decision_metodo_pago=cfdi.requiere_decision_metodo_pago,
         )
 
@@ -219,121 +228,135 @@ def confirmar_facturas(
 
     gastos_creados: List[Gasto] = []
 
-    for item in data.items:
-        try:
-            s_path = staging_dir(item.staging_id)
-        except FileNotFoundError:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"La carga temporal {item.staging_id} no existe o expiró. Por favor vuelve a subir el archivo.",
-            )
+    try:
+        for item in data.items:
+            try:
+                s_path = staging_dir(item.staging_id)
+            except FileNotFoundError:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail=f"La carga temporal {item.staging_id} no existe o expiró. Por favor vuelve a subir el archivo.",
+                )
 
-        staged_xml = s_path / "factura.xml"
-        if not staged_xml.exists():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="No se encontró el archivo XML en el almacenamiento temporal.",
-            )
+            staged_xml = s_path / "factura.xml"
+            if not staged_xml.exists():
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="No se encontró el archivo XML en el almacenamiento temporal.",
+                )
 
-        # Re-parsear el XML como única fuente de verdad
-        try:
-            cfdi = extract_cfdi_xml(staged_xml.read_bytes())
-        except CfdiParseError as e:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Error al verificar XML en staging: {str(e)}",
-            )
+            # Re-parsear el XML como única fuente de verdad
+            try:
+                cfdi = extract_cfdi_xml(staged_xml.read_bytes())
+            except CfdiParseError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Error al verificar XML en staging: {str(e)}",
+                )
 
-        # Verificar unicidad de UUID
-        existente = db.query(Factura).filter(Factura.uuid == cfdi.uuid).first()
-        if existente:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail={
-                    "codigo": "factura_duplicada",
-                    "uuid": cfdi.uuid,
-                    "obra_id": existente.gasto.obra_id if existente.gasto else 0,
-                    "obra_nombre": existente.gasto.obra.nombre if (existente.gasto and existente.gasto.obra) else "",
-                    "fecha": existente.gasto.fecha.isoformat() if existente.gasto else "",
-                    "mensaje": f"La factura con UUID {cfdi.uuid} ya fue registrada previamente.",
-                },
-            )
+            # Verificar unicidad de UUID
+            existente = db.query(Factura).filter(Factura.uuid == cfdi.uuid).first()
+            if existente:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail={
+                        "codigo": "factura_duplicada",
+                        "uuid": cfdi.uuid,
+                        "obra_id": existente.gasto.obra_id if existente.gasto else 0,
+                        "obra_nombre": existente.gasto.obra.nombre if (existente.gasto and existente.gasto.obra) else "",
+                        "fecha": existente.gasto.fecha.isoformat() if existente.gasto else "",
+                        "mensaje": f"La factura con UUID {cfdi.uuid} ya fue registrada previamente.",
+                    },
+                )
 
-        # Proveedor: buscar o crear
-        prov = db.query(Proveedor).filter(Proveedor.rfc == cfdi.rfc_emisor).first()
-        if not prov:
-            razon = item.proveedor_razon_social.strip() if item.proveedor_razon_social else cfdi.nombre_emisor
-            alias = item.proveedor_alias.strip() if item.proveedor_alias else None
-            prov = Proveedor(rfc=cfdi.rfc_emisor, razon_social=razon, alias=alias)
-            db.add(prov)
+            # Proveedor: buscar o crear
+            prov = db.query(Proveedor).filter(Proveedor.rfc == cfdi.rfc_emisor).first()
+            if not prov:
+                razon = item.proveedor_razon_social.strip() if item.proveedor_razon_social else cfdi.nombre_emisor
+                alias = item.proveedor_alias.strip() if item.proveedor_alias else None
+                prov = Proveedor(rfc=cfdi.rfc_emisor, razon_social=razon, alias=alias)
+                db.add(prov)
+                db.flush()
+            else:
+                if item.proveedor_alias is not None:
+                    prov.alias = item.proveedor_alias.strip() if item.proveedor_alias else None
+                if item.proveedor_razon_social:
+                    prov.razon_social = item.proveedor_razon_social.strip()
+                db.flush()
+
+            # Validar método de pago obligatorio
+            if not item.metodo_pago:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="Debe seleccionar un método de pago para la factura.",
+                )
+
+            # Crear Gasto
+            fecha_gasto = item.fecha or cfdi.fecha
+            concepto_gasto = (item.concepto_resumido.strip() if item.concepto_resumido else "") or cfdi.concepto_sugerido
+            comprobante_gasto = (item.comprobante.strip() if item.comprobante else "") or cfdi.comprobante
+
+            gasto = Gasto(
+                obra_id=obra_id,
+                fecha=fecha_gasto,
+                proveedor_id=prov.id,
+                concepto_resumido=concepto_gasto,
+                comprobante=comprobante_gasto,
+                tipo_comprobante="FACTURA",
+                importe=cfdi.total,  # Total exacto del CFDI
+                metodo_pago=item.metodo_pago,
+                origen=OrigenGasto.XML,
+            )
+            db.add(gasto)
             db.flush()
-        else:
-            if item.proveedor_alias is not None:
-                prov.alias = item.proveedor_alias.strip() if item.proveedor_alias else None
-            if item.proveedor_razon_social:
-                prov.razon_social = item.proveedor_razon_social.strip()
+
+            # Mover archivos de staging a almacenamiento permanente
+            staged_pdf = s_path / "factura.pdf"
+            rel_xml = commit_staged_file(staged_xml, obra_id, cfdi.uuid, "xml")
+            rel_pdf = None
+            if staged_pdf.exists():
+                rel_pdf = commit_staged_file(staged_pdf, obra_id, cfdi.uuid, "pdf")
+
+            # Limpiar directorio de staging de este item
+            try:
+                import shutil
+                shutil.rmtree(s_path, ignore_errors=True)
+            except Exception:
+                pass
+
+            # Crear registro de Factura
+            factura = Factura(
+                gasto_id=gasto.id,
+                uuid=cfdi.uuid,
+                serie=cfdi.serie,
+                folio=cfdi.folio,
+                subtotal=cfdi.subtotal,
+                total=cfdi.total,
+                rfc_emisor=cfdi.rfc_emisor,
+                forma_pago_sat=cfdi.forma_pago,
+                metodo_pago_sat=cfdi.metodo_pago_sat,
+                ruta_xml=rel_xml,
+                ruta_pdf=rel_pdf,
+            )
+            db.add(factura)
             db.flush()
 
-        # Validar método de pago obligatorio
-        if not item.metodo_pago:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="Debe seleccionar un método de pago para la factura.",
-            )
+            gastos_creados.append(gasto)
 
-        # Crear Gasto
-        fecha_gasto = item.fecha or cfdi.fecha
-        concepto_gasto = (item.concepto_resumido.strip() if item.concepto_resumido else "") or cfdi.concepto_sugerido
-        comprobante_gasto = (item.comprobante.strip() if item.comprobante else "") or cfdi.comprobante
-
-        gasto = Gasto(
-            obra_id=obra_id,
-            fecha=fecha_gasto,
-            proveedor_id=prov.id,
-            concepto_resumido=concepto_gasto,
-            comprobante=comprobante_gasto,
-            tipo_comprobante="FACTURA",
-            importe=cfdi.total,  # Total exacto del CFDI
-            metodo_pago=item.metodo_pago,
-            origen=OrigenGasto.XML,
+        return [gasto_a_out(g) for g in gastos_creados]
+    except HTTPException:
+        raise
+    except Exception as exc:
+        tb = traceback.format_exc()
+        logger.error(f"Error 500 al confirmar facturas en obra {obra_id}: {exc}\n{tb}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "codigo": "error_confirmar_factura",
+                "mensaje": "No se pudo guardar la factura. Los detalles técnicos se guardaron en el registro.",
+                "detalles_tecnicos": tb,
+            },
         )
-        db.add(gasto)
-        db.flush()
-
-        # Mover archivos de staging a almacenamiento permanente
-        staged_pdf = s_path / "factura.pdf"
-        rel_xml = commit_staged_file(staged_xml, obra_id, cfdi.uuid, "xml")
-        rel_pdf = None
-        if staged_pdf.exists():
-            rel_pdf = commit_staged_file(staged_pdf, obra_id, cfdi.uuid, "pdf")
-
-        # Limpiar directorio de staging de este item
-        try:
-            import shutil
-            shutil.rmtree(s_path, ignore_errors=True)
-        except Exception:
-            pass
-
-        # Crear registro de Factura
-        factura = Factura(
-            gasto_id=gasto.id,
-            uuid=cfdi.uuid,
-            serie=cfdi.serie,
-            folio=cfdi.folio,
-            subtotal=cfdi.subtotal,
-            total=cfdi.total,
-            rfc_emisor=cfdi.rfc_emisor,
-            forma_pago_sat=cfdi.forma_pago,
-            metodo_pago_sat=cfdi.metodo_pago_sat,
-            ruta_xml=rel_xml,
-            ruta_pdf=rel_pdf,
-        )
-        db.add(factura)
-        db.flush()
-
-        gastos_creados.append(gasto)
-
-    return [gasto_a_out(g) for g in gastos_creados]
 
 
 @router.get("/facturas/{gasto_id}/archivo/{tipo}")

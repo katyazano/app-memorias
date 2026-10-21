@@ -1,0 +1,35 @@
+<cfdi:Comprobante xmlns:cfdi="http://www.sat.gob.mx/cfd/4" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.sat.gob.mx/cfd/4 http://www.sat.gob.mx/sitio_internet/cfd/4/cfdv40.xsd" Version="4.0" Serie="JUP" Folio="135506" Fecha="2025-07-14T18:55:57" Sello="fZD6dCxsAsZdW+GwTV0vdCfOLKcKATra1tRUMV300zBNXCYZBBKlu4pEPUbw2QFAFObTfppUQnZk/UxIeKAd+faT1ee/wTFT1FqDBLM5zYQI8jr1rUWYx2yQE5NdpjNQLPqTTI7eTyCV77BJbCQJuwlXH9qDK7044PrKsYmY7pLYpAuDLYm8J86l3qmeymJ11zeyN0C59MZ3E6SrQBlMqIMhOGwufdnGKTH+Sf/t9KqTEJi0b6xPQCjx8XWOiBh30+pqL+ciBrE3dKmQlY/ddxRNa0xZnbkvwhekZsRb8owIRge/Hby/lkQI5YcPg//YDPV82+SQdY0k+5QzK591jA==" FormaPago="03" NoCertificado="00001000000708181457" Certificado="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" CondicionesDePago="Contado" SubTotal="8467.69" Moneda="MXN" TipoCambio="1" Total="9822.52" TipoDeComprobante="I" Exportacion="01" MetodoPago="PUE" LugarExpedicion="45110">
+<cfdi:Emisor Nombre="VITROHOGAR DE AGUASCALIENTES" Rfc="VAG830511596" RegimenFiscal="601"/>
+<cfdi:Receptor UsoCFDI="G03" RegimenFiscalReceptor="601" DomicilioFiscalReceptor="45140" Nombre="SEA FOOD NAYAMEX" Rfc="SFN050308RT5"/>
+<cfdi:Conceptos>
+<cfdi:Concepto ClaveProdServ="30161706" NoIdentificacion="CRFR21CH" Cantidad="22.000000" ClaveUnidad="XBX" Unidad="CJA" Descripcion="FRESNO CHERRY 22.5X60 1A CJA 1.89 M2" ValorUnitario="284.965517" Importe="6269.241379" ObjetoImp="02">
+<cfdi:Impuestos>
+<cfdi:Traslados>
+<cfdi:Traslado TasaOCuota="0.160000" Base="6269.241379" Importe="1003.078621" Impuesto="002" TipoFactor="Tasa"/>
+</cfdi:Traslados>
+</cfdi:Impuestos>
+</cfdi:Concepto>
+<cfdi:Concepto ClaveProdServ="23232201" NoIdentificacion="VPAD42" Cantidad="16.000000" ClaveUnidad="XSA" Unidad="SCO" Descripcion="PEGAMIX PISOS Y MARMOL GRIS SCO DE 20 KG" ValorUnitario="118.017241" Importe="1888.275862" ObjetoImp="02">
+<cfdi:Impuestos>
+<cfdi:Traslados>
+<cfdi:Traslado TasaOCuota="0.160000" Base="1888.275862" Importe="302.124138" Impuesto="002" TipoFactor="Tasa"/>
+</cfdi:Traslados>
+</cfdi:Impuestos>
+</cfdi:Concepto>
+<cfdi:Concepto ClaveProdServ="23232201" NoIdentificacion="VPAD35AD" Cantidad="2.000000" ClaveUnidad="XBX" Unidad="CJA" Descripcion="BOQUILLEX UNIVERSAL S/ARENA ADOBE 5KG" ValorUnitario="155.086207" Importe="310.172414" ObjetoImp="02">
+<cfdi:Impuestos>
+<cfdi:Traslados>
+<cfdi:Traslado TasaOCuota="0.160000" Base="310.172414" Importe="49.627586" Impuesto="002" TipoFactor="Tasa"/>
+</cfdi:Traslados>
+</cfdi:Impuestos>
+</cfdi:Concepto>
+</cfdi:Conceptos>
+<cfdi:Impuestos TotalImpuestosTrasladados="1354.83">
+<cfdi:Traslados>
+<cfdi:Traslado Impuesto="002" TipoFactor="Tasa" TasaOCuota="0.160000" Base="8467.69" Importe="1354.83"/>
+</cfdi:Traslados>
+</cfdi:Impuestos>
+<cfdi:Complemento>
+<tfd:TimbreFiscalDigital xmlns:tfd="http://www.sat.gob.mx/TimbreFiscalDigital" xsi:schemaLocation="http://www.sat.gob.mx/TimbreFiscalDigital http://www.sat.gob.mx/sitio_internet/cfd/TimbreFiscalDigital/TimbreFiscalDigitalv11.xsd" Version="1.1" UUID="F22D6D3B-5BC4-4C6B-9662-8F34E18E415B" FechaTimbrado="2025-07-14T18:56:48" RfcProvCertif="SFE0807172W8" SelloCFD="fZD6dCxsAsZdW+GwTV0vdCfOLKcKATra1tRUMV300zBNXCYZBBKlu4pEPUbw2QFAFObTfppUQnZk/UxIeKAd+faT1ee/wTFT1FqDBLM5zYQI8jr1rUWYx2yQE5NdpjNQLPqTTI7eTyCV77BJbCQJuwlXH9qDK7044PrKsYmY7pLYpAuDLYm8J86l3qmeymJ11zeyN0C59MZ3E6SrQBlMqIMhOGwufdnGKTH+Sf/t9KqTEJi0b6xPQCjx8XWOiBh30+pqL+ciBrE3dKmQlY/ddxRNa0xZnbkvwhekZsRb8owIRge/Hby/lkQI5YcPg//YDPV82+SQdY0k+5QzK591jA==" NoCertificadoSAT="00001000000710052019" SelloSAT="PdK+w3dTrqIbIBpwmKjK3yX57nZ2tPV5wqndZtIih9MRPvxn6Sp7zuS5NapkLe+U+XLIDiU7WpSRG/yU7irWP4ptlXz/KCF7+sDuUVKc7k5wUszxkWF/9x2CFGaPAAIYVHmdUbbMSk/djOene1KulposlIER1Q1EdNqu0IiGAchF8xl8LiM4R2+3Y+SwHJ71nyabXHKqbgiF1s0OLCjzf6wJbxXiORKp1EF34GWpSIIdzTJNIILd6L9wCsMcI1B/+okXIVBfl36xij3t5ZWQXWvQb0FQ3EB86xeCH334yduQZyCzqVOUZdbM5qBHsw8+aYqEo+jLFHATMfzVKa+WSQ=="/>
+</cfdi:Complemento>
+</cfdi:Comprobante>

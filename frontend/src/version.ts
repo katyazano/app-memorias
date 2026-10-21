@@ -1,5 +1,5 @@
 /**
  * Versión de compilación del frontend.
- * Debe coincidir con config.APP_VERSION del backend.
+ * Generado automáticamente por scripts/stamp_version.py desde VERSION.
  */
-export const FRONTEND_BUILD_VERSION = '2.0.0-20261017.3';
+export const FRONTEND_BUILD_VERSION = '2.0.0+20261020.0356';

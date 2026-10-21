@@ -21,6 +21,15 @@ from fastapi.testclient import TestClient
 def init_test_env():
     config.ensure_dirs()
     Base.metadata.create_all(bind=engine)
+    try:
+        from alembic.config import Config
+        from alembic import command
+        alembic_cfg = Config(str(config.ALEMBIC_INI))
+        alembic_cfg.set_main_option("script_location", str(config.MIGRATIONS_DIR))
+        alembic_cfg.set_main_option("sqlalchemy.url", config.DATABASE_URL)
+        command.stamp(alembic_cfg, "head")
+    except Exception:
+        pass
     yield
 
 

@@ -11,6 +11,9 @@ import {
   Layers,
   ExternalLink,
   RefreshCw,
+  Copy,
+  Check,
+  FolderOpen,
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { api } from '@/lib/api'
@@ -31,6 +34,9 @@ export function CargaFacturasPage() {
 
   const [filas, setFilas] = useState<FilaFacturaState[]>([])
   const [erroresGenerales, setErroresGenerales] = useState<string[]>([])
+  const [errorDetallesTecnicos, setErrorDetallesTecnicos] = useState<string | null>(null)
+  const [copiado, setCopiado] = useState(false)
+  const [abriendoLogs, setAbriendoLogs] = useState(false)
   const [exitoResumen, setExitoResumen] = useState<{
     guardadas: number
     totalImporte: string
@@ -116,9 +122,11 @@ export function CargaFacturasPage() {
 
       setFilas(nuevasFilas)
       setErroresGenerales(erroresNoDuplicados)
+      setErrorDetallesTecnicos(null)
     },
     onError: (err: any) => {
       setErroresGenerales([err.message || 'Error al procesar los archivos en el servidor.'])
+      setErrorDetallesTecnicos(err.detallesTecnicos || err.stack || err.message || null)
     },
   })
 
@@ -143,6 +151,8 @@ export function CargaFacturasPage() {
         gastos: gastosCreados,
       })
       setFilas([])
+      setErroresGenerales([])
+      setErrorDetallesTecnicos(null)
     },
     onError: (err: any) => {
       // Si el staging expiró (404)
@@ -150,8 +160,14 @@ export function CargaFacturasPage() {
         setErroresGenerales([
           'La sesión de carga temporal ha expirado por tiempo de inactividad (TTL). Por favor vuelve a arrastrar los archivos para reiniciar la revisión.',
         ])
+        setErrorDetallesTecnicos(null)
       } else {
-        setErroresGenerales([err.message || 'Ocurrió un error al guardar las facturas en la base de datos.'])
+        let msg = err.message || 'No se pudo guardar la factura. Los detalles técnicos se guardaron en el registro.'
+        if (msg.includes('500') || msg.includes('Internal Server Error')) {
+          msg = 'No se pudo guardar la factura. Los detalles técnicos se guardaron en el registro.'
+        }
+        setErroresGenerales([msg])
+        setErrorDetallesTecnicos(err.detallesTecnicos || err.stack || err.message || null)
       }
     },
   })
@@ -317,16 +333,70 @@ export function CargaFacturasPage() {
 
       {/* Mensajes de advertencia y errores generales */}
       {erroresGenerales.length > 0 && (
-        <div className="bg-red-50/90 border border-red-200 rounded-lg p-4 space-y-2 text-xs text-red-900">
-          <div className="flex items-center space-x-2 font-semibold">
+        <div className="bg-red-50/90 border border-red-200 rounded-lg p-4 space-y-3 text-xs text-red-900 shadow-sm">
+          <div className="flex items-center space-x-2 font-semibold text-red-900">
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
-            <span>Atención con los siguientes archivos:</span>
+            <span>Atención:</span>
           </div>
           <ul className="list-disc pl-5 space-y-1 text-red-800">
             {erroresGenerales.map((err, i) => (
               <li key={i}>{err}</li>
             ))}
           </ul>
+          {errorDetallesTecnicos && (
+            <div className="pt-2 border-t border-red-200/80 flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs bg-white text-zinc-700 hover:bg-zinc-50 border-red-200"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(
+                      `${erroresGenerales.join('\n')}\n\nDetalles técnicos:\n${errorDetallesTecnicos}`
+                    )
+                    setCopiado(true)
+                    setTimeout(() => setCopiado(false), 2500)
+                  } catch (e) {
+                    console.error('Error al copiar:', e)
+                  }
+                }}
+              >
+                {copiado ? (
+                  <>
+                    <Check className="w-3.5 h-3.5 mr-1 text-emerald-600" />
+                    <span>¡Detalles copiados!</span>
+                  </>
+                ) : (
+                  <>
+                    <Copy className="w-3.5 h-3.5 mr-1 text-zinc-500" />
+                    <span>Copiar detalles</span>
+                  </>
+                )}
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs bg-white text-zinc-700 hover:bg-zinc-50 border-red-200"
+                disabled={abriendoLogs}
+                onClick={async () => {
+                  setAbriendoLogs(true)
+                  try {
+                    await api.abrirCarpetaLogs()
+                  } catch (e) {
+                    console.error('Error al abrir carpeta de logs:', e)
+                  } finally {
+                    setAbriendoLogs(false)
+                  }
+                }}
+              >
+                <FolderOpen className="w-3.5 h-3.5 mr-1 text-zinc-500" />
+                <span>Abrir carpeta de registros</span>
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

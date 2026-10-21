@@ -247,3 +247,14 @@ class Configuracion(TimestampMixin, Base):
     clave: Mapped[str] = mapped_column(String(100), primary_key=True)
     valor: Mapped[str] = mapped_column(Text, nullable=False, default="")
 
+
+class RegistroAuditoria(TimestampMixin, Base):
+    __tablename__ = "registros_auditoria"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    fecha: Mapped[datetime] = mapped_column(DateTime, default=datetime.now, nullable=False)
+    accion: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    memoria_id: Mapped[Optional[int]] = mapped_column(ForeignKey("memorias.id", ondelete="SET NULL"), nullable=True)
+    obra_id: Mapped[Optional[int]] = mapped_column(ForeignKey("obras.id", ondelete="CASCADE"), nullable=True)
+    detalles: Mapped[str] = mapped_column(Text, nullable=False, default="")
+

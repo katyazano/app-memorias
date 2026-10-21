@@ -19,10 +19,19 @@ const SUFIJOS_SOCIEDAD = [
   /\bSOCIEDAD\s+CIVIL\b/gi,
 ]
 
+const PREPOSICIONES = new Set([
+  'A', 'AL', 'DE', 'DEL', 'LA', 'LAS', 'EL', 'LOS', 'EN',
+  'PARA', 'POR', 'CON', 'SIN', 'SOBRE', 'HACIA', 'DESDE', 'HASTA', 'ENTRE', 'Y', 'E', 'O', 'U'
+])
+
 /**
- * Sugiere un alias abreviado a partir de una razón social (ej. "CEMENTOS TOLTECA SA DE CV" -> "CEMENTOS TOLTECA")
+ * Sugiere un alias abreviado memorable a partir de una razón social.
+ * - Elimina sufijos societarios.
+ * - Corta en límite de palabra si excede ~32 caracteres.
+ * - Nunca termina en preposición ni conjunción.
+ * Ej. "DE LA TORRE MATERIALES PARA CONSTRUCCION" -> "DE LA TORRE MATERIALES"
  */
-export function sugerirAlias(razonSocial: string): string {
+export function sugerirAlias(razonSocial: string, maxLen: number = 32): string {
   if (!razonSocial) return ''
   let limpio = razonSocial.trim()
 
@@ -31,21 +40,33 @@ export function sugerirAlias(razonSocial: string): string {
   }
 
   // Quitar comas o puntos residuales al final y espacios duplicados
-  limpio = limpio.replace(/[,.-]+$/, '').replace(/\s+/g, ' ').trim()
+  limpio = limpio.replace(/[,.;:\-_]+$/, '').replace(/\s+/g, ' ').trim()
 
-  // Si quedó muy largo (más de 35 caracteres), truncar a las primeras palabras
-  if (limpio.length > 35) {
-    const palabras = limpio.split(' ')
-    let resultado = ''
-    for (const p of palabras) {
-      if ((resultado + ' ' + p).trim().length <= 35) {
-        resultado = (resultado + ' ' + p).trim()
-      } else {
-        break
-      }
+  const palabras = limpio.split(' ')
+
+  if (limpio.length <= maxLen) {
+    while (palabras.length > 0 && PREPOSICIONES.has(palabras[palabras.length - 1].toUpperCase())) {
+      palabras.pop()
     }
-    limpio = resultado || limpio.slice(0, 35)
+    return palabras.join(' ').replace(/[,.; ]+$/, '') || limpio
   }
 
-  return limpio || razonSocial.trim().slice(0, 30)
+  const seleccionadas: string[] = []
+  let currLen = 0
+  for (const p of palabras) {
+    const adicional = seleccionadas.length === 0 ? p.length : p.length + 1
+    if (currLen + adicional <= maxLen) {
+      seleccionadas.push(p)
+      currLen += adicional
+    } else {
+      break
+    }
+  }
+
+  while (seleccionadas.length > 0 && PREPOSICIONES.has(seleccionadas[seleccionadas.length - 1].toUpperCase())) {
+    seleccionadas.pop()
+  }
+
+  const res = seleccionadas.join(' ').replace(/[,.; ]+$/, '')
+  return res || limpio.slice(0, maxLen).trim()
 }

@@ -1,10 +1,58 @@
+# Entorno y credenciales
 .env
+.env.*
+!.env.example
+
+# Datos locales de usuario, bases de datos y almacenamiento
 data/
-docs/
+storage/
+logs/
+respaldos/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.log
+*.tmp
+
+# Entorno virtual y Python
 .venv/
+env/
+venv/
 __pycache__/
-*.pyc
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+# Pruebas y cobertura
 .pytest_cache/
+.coverage
+htmlcov/
+
+# Empaquetado y compilación (PyInstaller / Inno Setup)
+build/
+dist/
+version_info.txt
+*.exe
+
+# Respaldos comprimidos temporales
+*.zip
+
+# Frontend (Node / Vite)
 frontend/node_modules/
 frontend/dist/
+frontend/.vite/
+frontend/dist-ssr/
 
+# IDEs y editores
+.vscode/
+.idea/
+*.suo
+*.user
+*.swp
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+Desktop.ini

@@ -41,6 +41,7 @@ import { Skeleton } from '@/components/ui/Skeleton';
 import { formatDate, formatMoney, formatMoneySimple, formatRangoSemana, formatFechaLarga, formatTextoEnLetra, formatFolioFactura } from '@/lib/utils';
 import { BuscarGastosExtraDialog } from '@/components/memorias/BuscarGastosExtraDialog';
 import { TotalesStickyFooter } from '@/components/memorias/TotalesStickyFooter';
+import { FallbackPdfModal } from '@/components/FallbackPdfModal';
 import type { Obra, PreviewOut, RenglonMemoria, Gasto, PagoRaya, MemoriaResumen, Memoria } from '@/types';
 
 type TabCategoria = 'transferencia' | 'efectivo' | 'raya' | 'anticipo';
@@ -405,19 +406,26 @@ export function AsistenteMemoriaPage() {
 
   const [descargandoPdf, setDescargandoPdf] = useState(false);
   const [descargandoExcel, setDescargandoExcel] = useState(false);
+  const [fallbackModalMemoriaId, setFallbackModalMemoriaId] = useState<number | null>(null);
+  const [fallbackModalError, setFallbackModalError] = useState<string | null>(null);
 
   const handleDescargarPdfPaso3 = async () => {
+    let id = memoriaIdActivo;
     try {
       setDescargandoPdf(true);
       setErrorGuardado(null);
-      let id = memoriaIdActivo;
       if (!id) {
         const mem = await guardarMutation.mutateAsync();
         id = mem.id;
       }
       await api.descargarPdf(id);
     } catch (err: any) {
-      setErrorGuardado(err.message || 'Error al descargar el PDF');
+      const msg = err.message || 'Error al descargar el PDF';
+      setErrorGuardado(msg);
+      if (id) {
+        setFallbackModalMemoriaId(id);
+        setFallbackModalError(msg);
+      }
     } finally {
       setDescargandoPdf(false);
     }
@@ -2083,6 +2091,14 @@ export function AsistenteMemoriaPage() {
           </div>
         </div>
       </Dialog>
+
+      {/* Modal alternativo de guardado directo en PDF */}
+      <FallbackPdfModal
+        open={fallbackModalMemoriaId !== null}
+        onClose={() => setFallbackModalMemoriaId(null)}
+        memoriaId={fallbackModalMemoriaId}
+        errorMessage={fallbackModalError}
+      />
 
       {/* Barra Fija Inferior con Totales (Paso 2) */}
       {paso === 2 && (

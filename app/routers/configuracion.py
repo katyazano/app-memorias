@@ -212,8 +212,8 @@ def descargar_respaldo():
                         # Omitir temporales de staging
                         if "_staging" in full_p.parts:
                             continue
-                        rel_p = full_p.relative_to(DATA_DIR)
-                        zip_file.write(full_p, arcname=f"data/{rel_p.as_posix()}")
+                        rel_p = full_p.relative_to(STORAGE_DIR)
+                        zip_file.write(full_p, arcname=f"storage/{rel_p.as_posix()}")
     finally:
         if temp_db_path and temp_db_path.exists():
             try:

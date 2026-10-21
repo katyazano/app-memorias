@@ -16,12 +16,34 @@ STAGING_TTL_SECONDS = 24 * 3600
 
 
 def _rel(path: Path) -> str:
-    return path.relative_to(config.DATA_DIR).as_posix()
+    """Devuelve la ruta relativa en formato POSIX para guardar en la BD ('storage/...')."""
+    try:
+        rel = path.relative_to(config.STORAGE_DIR).as_posix()
+        return f"storage/{rel}"
+    except ValueError:
+        try:
+            return path.relative_to(config.DATA_DIR).as_posix()
+        except ValueError:
+            return f"storage/{path.name}"
 
 
 def abs_path(ruta_relativa: str) -> Path:
-    """Resuelve una ruta relativa de la BD; impide salirse de DATA_DIR."""
-    p = (config.DATA_DIR / ruta_relativa).resolve()
+    """Resuelve una ruta relativa de la BD; busca en STORAGE_DIR y en DATA_DIR."""
+    norm = ruta_relativa.replace("\\", "/").strip("/")
+    if norm.startswith("storage/"):
+        sub = norm[len("storage/"):]
+        p = (config.STORAGE_DIR / sub).resolve()
+        if config.STORAGE_DIR in p.parents or p == config.STORAGE_DIR:
+            if p.exists():
+                return p
+        # Respaldo: verificar si el archivo está en config.DATA_DIR / norm (formato legacy dev)
+        legacy_p = (config.DATA_DIR / norm).resolve()
+        if legacy_p.exists() and (config.DATA_DIR in legacy_p.parents or legacy_p == config.DATA_DIR):
+            return legacy_p
+        # Si aún no existe en disco, devolver la ruta canónica en STORAGE_DIR
+        return p
+
+    p = (config.DATA_DIR / norm).resolve()
     if config.DATA_DIR not in p.parents and p != config.DATA_DIR:
         raise ValueError("Ruta fuera del directorio de datos.")
     return p
@@ -68,10 +90,16 @@ def cleanup_staging() -> None:
 
 
 def commit_staged_file(src: Path, obra_id: int, uuid: str, ext: str) -> str:
-    """Mueve un archivo de staging a storage/{obra_id}/{UUID}.{ext}; devuelve ruta relativa."""
+    """Copia un archivo de staging a storage/{obra_id}/{UUID}.{ext}; devuelve ruta relativa.
+    Usa copy2 antes de eliminar el origen para mayor seguridad.
+    """
     extension = ext.lstrip(".")
     dest = obra_dir(obra_id) / f"{uuid}.{extension}"
-    shutil.move(str(src), str(dest))
+    shutil.copy2(str(src), str(dest))
+    try:
+        src.unlink(missing_ok=True)
+    except OSError:
+        pass
     return _rel(dest)
 
 

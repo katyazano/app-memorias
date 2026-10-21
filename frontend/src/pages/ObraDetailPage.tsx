@@ -20,6 +20,7 @@ import {
   AlertCircle,
   ChevronLeft,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react'
 import { api } from '@/lib/api'
 import { formatMoney, formatDate, formatEstadoObra, formatFolioFactura } from '@/lib/utils'
@@ -27,10 +28,12 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { Skeleton } from '@/components/ui/Skeleton'
 import { EmptyState } from '@/components/ui/EmptyState'
+import { Dialog } from '@/components/ui/Dialog'
 import { GastoEditDialog } from '@/components/gastos/GastoEditDialog'
 import { GastoManualDialog } from '@/components/gastos/GastoManualDialog'
 import { RayaSemanaDialog } from '@/components/rayas/RayaSemanaDialog'
 import { AnticipoDialog } from '@/components/anticipos/AnticipoDialog'
+import { FallbackPdfModal } from '@/components/FallbackPdfModal'
 import type { Gasto, PagoRaya, Anticipo, MemoriaResumen, GastoManualCreate, PagosSemanaCreate } from '@/types'
 
 export const ObraDetailPage: React.FC = () => {
@@ -46,6 +49,21 @@ export const ObraDetailPage: React.FC = () => {
   const [rayaSemanaModalOpen, setRayaSemanaModalOpen] = useState(false)
   const [anticipoModalOpen, setAnticipoModalOpen] = useState(false)
   const [anticipoAEditar, setAnticipoAEditar] = useState<Anticipo | null>(null)
+  const [descargandoPdfId, setDescargandoPdfId] = useState<number | null>(null)
+  const [fallbackPdfId, setFallbackPdfId] = useState<number | null>(null)
+  const [fallbackPdfError, setFallbackPdfError] = useState<string | null>(null)
+
+  const handleDescargarPdf = async (memoriaId: number) => {
+    try {
+      setDescargandoPdfId(memoriaId)
+      await api.descargarPdf(memoriaId)
+    } catch (err: any) {
+      setFallbackPdfId(memoriaId)
+      setFallbackPdfError(err.message || 'Error al generar el PDF')
+    } finally {
+      setDescargandoPdfId(null)
+    }
+  }
 
   // Consultas
   const { data: obra, isLoading: loadingObra } = useQuery({
@@ -100,6 +118,86 @@ export const ObraDetailPage: React.FC = () => {
     const inicio = (paginaGastos - 1) * tamanoPaginaGastos
     return gastos.slice(inicio, inicio + tamanoPaginaGastos)
   }, [gastos, paginaGastos, tamanoPaginaGastos])
+
+  // Paginación de Rayas (agrupadas por semana)
+  const rayasPorSemana = React.useMemo(() => {
+    return (rayas || []).reduce<Record<number, PagoRaya[]>>((acc, r) => {
+      if (!acc[r.semana_numero]) acc[r.semana_numero] = []
+      acc[r.semana_numero].push(r)
+      return acc
+    }, {})
+  }, [rayas])
+
+  const semanasOrdenadas = React.useMemo(() => {
+    return Object.keys(rayasPorSemana)
+      .map(Number)
+      .sort((a, b) => b - a)
+  }, [rayasPorSemana])
+
+  const [paginaRayas, setPaginaRayas] = useState(1)
+  const [tamanoPaginaRayas, setTamanoPaginaRayas] = useState(10)
+  const totalSemanas = semanasOrdenadas.length
+  const totalPaginasRayas = tamanoPaginaRayas === -1 ? 1 : Math.max(1, Math.ceil(totalSemanas / tamanoPaginaRayas))
+  const semanasPaginadas = React.useMemo(() => {
+    if (tamanoPaginaRayas === -1) return semanasOrdenadas
+    const inicio = (paginaRayas - 1) * tamanoPaginaRayas
+    return semanasOrdenadas.slice(inicio, inicio + tamanoPaginaRayas)
+  }, [semanasOrdenadas, paginaRayas, tamanoPaginaRayas])
+
+  // Paginación de Anticipos
+  const [paginaAnticipos, setPaginaAnticipos] = useState(1)
+  const [tamanoPaginaAnticipos, setTamanoPaginaAnticipos] = useState(15)
+  const totalAnticipos = anticipos?.length || 0
+  const totalPaginasAnticipos = tamanoPaginaAnticipos === -1 ? 1 : Math.max(1, Math.ceil(totalAnticipos / tamanoPaginaAnticipos))
+  const anticiposPaginados = React.useMemo(() => {
+    if (!anticipos) return []
+    if (tamanoPaginaAnticipos === -1) return anticipos
+    const inicio = (paginaAnticipos - 1) * tamanoPaginaAnticipos
+    return anticipos.slice(inicio, inicio + tamanoPaginaAnticipos)
+  }, [anticipos, paginaAnticipos, tamanoPaginaAnticipos])
+
+  // Paginación de Memorias
+  const [paginaMemorias, setPaginaMemorias] = useState(1)
+  const [tamanoPaginaMemorias, setTamanoPaginaMemorias] = useState(15)
+  const totalMemorias = memorias?.length || 0
+  const totalPaginasMemorias = tamanoPaginaMemorias === -1 ? 1 : Math.max(1, Math.ceil(totalMemorias / tamanoPaginaMemorias))
+  const memoriasPaginadas = React.useMemo(() => {
+    if (!memorias) return []
+    if (tamanoPaginaMemorias === -1) return memorias
+    const inicio = (paginaMemorias - 1) * tamanoPaginaMemorias
+    return memorias.slice(inicio, inicio + tamanoPaginaMemorias)
+  }, [memorias, paginaMemorias, tamanoPaginaMemorias])
+
+  // Identificar la última memoria cerrada (única que se puede reabrir)
+  const ultimaMemoriaCerrada = React.useMemo(() => {
+    if (!memorias) return null
+    const cerradas = memorias.filter((m) => m.estado === 'cerrada')
+    if (cerradas.length === 0) return null
+    return [...cerradas].sort((a, b) => b.numero - a.numero)[0]
+  }, [memorias])
+
+  // Estado y mutación para Reabrir Memoria
+  const [memoriaAReabrir, setMemoriaAReabrir] = useState<MemoriaResumen | null>(null)
+  const [errorReabrir, setErrorReabrir] = useState<string | null>(null)
+
+  const reabrirMemoriaMutation = useMutation({
+    mutationFn: (memoriaId: number) => api.reabrirMemoria(memoriaId),
+    onSuccess: (memoriaActualizada) => {
+      queryClient.invalidateQueries({ queryKey: ['memorias', obraId] })
+      queryClient.invalidateQueries({ queryKey: ['gastos', obraId] })
+      queryClient.invalidateQueries({ queryKey: ['rayas', obraId] })
+      queryClient.invalidateQueries({ queryKey: ['anticipos', obraId] })
+      queryClient.invalidateQueries({ queryKey: ['obra', obraId] })
+      queryClient.invalidateQueries({ queryKey: ['obra-resumen', obraId] })
+      queryClient.invalidateQueries({ queryKey: ['obras-resumen'] })
+      setMemoriaAReabrir(null)
+      setErrorReabrir(null)
+      navigate(`/obras/${obraId}/memorias/asistente?borrador_id=${memoriaActualizada.id}`)
+    },
+    onError: (err: any) => {
+      setErrorReabrir(err.message || 'Error al reabrir la memoria')
+    },
+  })
 
   // Mutaciones de Gastos
   const crearGastoManualMutation = useMutation({
@@ -218,16 +316,6 @@ export const ObraDetailPage: React.FC = () => {
     )
   }
 
-  // Agrupar rayas por semana para la vista agrupada con subtotales
-  const rayasPorSemana = (rayas || []).reduce<Record<number, PagoRaya[]>>((acc, r) => {
-    if (!acc[r.semana_numero]) acc[r.semana_numero] = []
-    acc[r.semana_numero].push(r)
-    return acc
-  }, {})
-
-  const semanasOrdenadas = Object.keys(rayasPorSemana)
-    .map(Number)
-    .sort((a, b) => b - a)
 
   return (
     <div className="space-y-6">
@@ -591,7 +679,7 @@ export const ObraDetailPage: React.FC = () => {
             />
           ) : (
             <div className="space-y-4">
-              {semanasOrdenadas.map((numSemana) => {
+              {semanasPaginadas.map((numSemana) => {
                 const pagosSemana = rayasPorSemana[numSemana]
                 const subtotalSemana = pagosSemana.reduce((sum, r) => sum + parseFloat(r.importe), 0)
                 const rangoFechas = pagosSemana[0]
@@ -661,6 +749,74 @@ export const ObraDetailPage: React.FC = () => {
                   </div>
                 )
               })}
+
+              {/* Barra de paginación de Rayas */}
+              {totalSemanas > 0 && (
+                <div className="bg-zinc-50/80 border border-zinc-200 rounded-lg px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-600">
+                  <div className="flex items-center gap-3">
+                    <span>
+                      Mostrando{' '}
+                      <strong className="font-mono text-zinc-800">
+                        {tamanoPaginaRayas === -1 ? 1 : (paginaRayas - 1) * tamanoPaginaRayas + 1}
+                      </strong>{' '}
+                      -{' '}
+                      <strong className="font-mono text-zinc-800">
+                        {tamanoPaginaRayas === -1
+                          ? totalSemanas
+                          : Math.min(paginaRayas * tamanoPaginaRayas, totalSemanas)}
+                      </strong>{' '}
+                      de <strong className="font-mono text-zinc-800">{totalSemanas}</strong> semanas
+                    </span>
+
+                    <div className="flex items-center gap-1.5 ml-2">
+                      <span className="text-zinc-500 text-[11px]">Por página:</span>
+                      <select
+                        value={tamanoPaginaRayas}
+                        onChange={(e) => {
+                          setTamanoPaginaRayas(Number(e.target.value))
+                          setPaginaRayas(1)
+                        }}
+                        className="bg-white border border-zinc-200 rounded px-2 py-1 text-xs font-medium text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                      >
+                        <option value={5}>5 semanas</option>
+                        <option value={10}>10 semanas</option>
+                        <option value={20}>20 semanas</option>
+                        <option value={-1}>Todas ({totalSemanas})</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {tamanoPaginaRayas !== -1 && totalPaginasRayas > 1 && (
+                    <div className="flex items-center gap-1">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={paginaRayas <= 1}
+                        onClick={() => setPaginaRayas((p) => Math.max(1, p - 1))}
+                        className="h-8 px-2 text-xs"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5 mr-0.5" />
+                        <span>Anterior</span>
+                      </Button>
+
+                      <div className="px-2 font-mono text-xs font-semibold text-zinc-700">
+                        {paginaRayas} / {totalPaginasRayas}
+                      </div>
+
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={paginaRayas >= totalPaginasRayas}
+                        onClick={() => setPaginaRayas((p) => Math.min(totalPaginasRayas, p + 1))}
+                        className="h-8 px-2 text-xs"
+                      >
+                        <span>Siguiente</span>
+                        <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -712,7 +868,7 @@ export const ObraDetailPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 font-normal text-zinc-800">
-                    {anticipos.map((ant) => (
+                    {anticiposPaginados.map((ant) => (
                       <tr key={ant.id} className="hover:bg-zinc-50/50">
                         <td className="py-2.5 px-4 font-mono">{formatDate(ant.fecha)}</td>
                         <td className="py-2.5 px-4 font-medium">{ant.comprobante || '—'}</td>
@@ -744,6 +900,74 @@ export const ObraDetailPage: React.FC = () => {
                     ))}
                   </tbody>
                 </table>
+
+                {/* Barra de paginación de Anticipos */}
+                {totalAnticipos > 0 && (
+                  <div className="bg-zinc-50/80 border-t border-zinc-200 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-600">
+                    <div className="flex items-center gap-3">
+                      <span>
+                        Mostrando{' '}
+                        <strong className="font-mono text-zinc-800">
+                          {tamanoPaginaAnticipos === -1 ? 1 : (paginaAnticipos - 1) * tamanoPaginaAnticipos + 1}
+                        </strong>{' '}
+                        -{' '}
+                        <strong className="font-mono text-zinc-800">
+                          {tamanoPaginaAnticipos === -1
+                            ? totalAnticipos
+                            : Math.min(paginaAnticipos * tamanoPaginaAnticipos, totalAnticipos)}
+                        </strong>{' '}
+                        de <strong className="font-mono text-zinc-800">{totalAnticipos}</strong> anticipos
+                      </span>
+
+                      <div className="flex items-center gap-1.5 ml-2">
+                        <span className="text-zinc-500 text-[11px]">Por página:</span>
+                        <select
+                          value={tamanoPaginaAnticipos}
+                          onChange={(e) => {
+                            setTamanoPaginaAnticipos(Number(e.target.value))
+                            setPaginaAnticipos(1)
+                          }}
+                          className="bg-white border border-zinc-200 rounded px-2 py-1 text-xs font-medium text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                        >
+                          <option value={15}>15</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={-1}>Todos ({totalAnticipos})</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {tamanoPaginaAnticipos !== -1 && totalPaginasAnticipos > 1 && (
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={paginaAnticipos <= 1}
+                          onClick={() => setPaginaAnticipos((p) => Math.max(1, p - 1))}
+                          className="h-8 px-2 text-xs"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5 mr-0.5" />
+                          <span>Anterior</span>
+                        </Button>
+
+                        <div className="px-2 font-mono text-xs font-semibold text-zinc-700">
+                          {paginaAnticipos} / {totalPaginasAnticipos}
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={paginaAnticipos >= totalPaginasAnticipos}
+                          onClick={() => setPaginaAnticipos((p) => Math.min(totalPaginasAnticipos, p + 1))}
+                          className="h-8 px-2 text-xs"
+                        >
+                          <span>Siguiente</span>
+                          <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -791,7 +1015,7 @@ export const ObraDetailPage: React.FC = () => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-100 font-normal text-zinc-800">
-                    {memorias.map((mem) => (
+                    {memoriasPaginadas.map((mem) => (
                       <tr key={mem.id} className="hover:bg-zinc-50/50">
                         <td className="py-2.5 px-4 font-mono font-bold text-zinc-900">
                           Memoria #{mem.numero}
@@ -818,15 +1042,31 @@ export const ObraDetailPage: React.FC = () => {
                               </Button>
                             </Link>
                           )}
+                          {mem.estado === 'cerrada' && mem.id === ultimaMemoriaCerrada?.id && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                setErrorReabrir(null)
+                                setMemoriaAReabrir(mem)
+                              }}
+                              className="text-xs inline-flex items-center gap-1 border-amber-300 text-amber-700 hover:bg-amber-50"
+                              title="Reabrir memoria para edición"
+                            >
+                              <RotateCcw className="w-3.5 h-3.5 text-amber-600" />
+                              <span>Reabrir</span>
+                            </Button>
+                          )}
                           <Button
                             variant="outline"
                             size="sm"
-                            onClick={() => api.descargarPdf(mem.id)}
+                            disabled={descargandoPdfId === mem.id}
+                            onClick={() => handleDescargarPdf(mem.id)}
                             className="text-xs inline-flex items-center gap-1 border-zinc-200"
                             title="Descargar PDF"
                           >
                             <FileDown className="w-3.5 h-3.5 text-red-600" />
-                            <span>PDF</span>
+                            <span>{descargandoPdfId === mem.id ? 'Generando...' : 'PDF'}</span>
                           </Button>
                           <Button
                             variant="outline"
@@ -848,6 +1088,74 @@ export const ObraDetailPage: React.FC = () => {
                     ))}
                   </tbody>
                 </table>
+
+                {/* Barra de paginación de Memorias */}
+                {totalMemorias > 0 && (
+                  <div className="bg-zinc-50/80 border-t border-zinc-200 px-4 py-3 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-zinc-600">
+                    <div className="flex items-center gap-3">
+                      <span>
+                        Mostrando{' '}
+                        <strong className="font-mono text-zinc-800">
+                          {tamanoPaginaMemorias === -1 ? 1 : (paginaMemorias - 1) * tamanoPaginaMemorias + 1}
+                        </strong>{' '}
+                        -{' '}
+                        <strong className="font-mono text-zinc-800">
+                          {tamanoPaginaMemorias === -1
+                            ? totalMemorias
+                            : Math.min(paginaMemorias * tamanoPaginaMemorias, totalMemorias)}
+                        </strong>{' '}
+                        de <strong className="font-mono text-zinc-800">{totalMemorias}</strong> memorias
+                      </span>
+
+                      <div className="flex items-center gap-1.5 ml-2">
+                        <span className="text-zinc-500 text-[11px]">Por página:</span>
+                        <select
+                          value={tamanoPaginaMemorias}
+                          onChange={(e) => {
+                            setTamanoPaginaMemorias(Number(e.target.value))
+                            setPaginaMemorias(1)
+                          }}
+                          className="bg-white border border-zinc-200 rounded px-2 py-1 text-xs font-medium text-zinc-700 focus:outline-none focus:ring-1 focus:ring-zinc-900"
+                        >
+                          <option value={15}>15</option>
+                          <option value={25}>25</option>
+                          <option value={50}>50</option>
+                          <option value={-1}>Todas ({totalMemorias})</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {tamanoPaginaMemorias !== -1 && totalPaginasMemorias > 1 && (
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={paginaMemorias <= 1}
+                          onClick={() => setPaginaMemorias((p) => Math.max(1, p - 1))}
+                          className="h-8 px-2 text-xs"
+                        >
+                          <ChevronLeft className="w-3.5 h-3.5 mr-0.5" />
+                          <span>Anterior</span>
+                        </Button>
+
+                        <div className="px-2 font-mono text-xs font-semibold text-zinc-700">
+                          {paginaMemorias} / {totalPaginasMemorias}
+                        </div>
+
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={paginaMemorias >= totalPaginasMemorias}
+                          onClick={() => setPaginaMemorias((p) => Math.min(totalPaginasMemorias, p + 1))}
+                          className="h-8 px-2 text-xs"
+                        >
+                          <span>Siguiente</span>
+                          <ChevronRight className="w-3.5 h-3.5 ml-0.5" />
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -902,6 +1210,86 @@ export const ObraDetailPage: React.FC = () => {
         }}
         isLoading={crearAnticipoMutation.isPending || actualizarAnticipoMutation.isPending}
       />
+
+      {/* Modal alternativo cuando falla la generación automática de PDF */}
+      <FallbackPdfModal
+        open={fallbackPdfId !== null}
+        onClose={() => setFallbackPdfId(null)}
+        memoriaId={fallbackPdfId}
+        errorMessage={fallbackPdfError}
+      />
+
+      {/* Modal de confirmación para Reabrir Memoria */}
+      <Dialog
+        open={memoriaAReabrir !== null}
+        onClose={() => {
+          if (!reabrirMemoriaMutation.isPending) {
+            setMemoriaAReabrir(null)
+            setErrorReabrir(null)
+          }
+        }}
+        title="Reabrir Memoria Cerrada"
+        description="Esta acción convierte la memoria nuevamente en borrador para permitir modificaciones."
+        maxWidth="md"
+      >
+        {memoriaAReabrir && (
+          <div className="space-y-4">
+            <div className="p-3.5 bg-amber-50 border border-amber-200/80 rounded-md text-amber-900 text-xs space-y-2">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-semibold text-amber-950">
+                    ¿Estás seguro de reabrir la Memoria #{memoriaAReabrir.numero}?
+                  </p>
+                  <p className="mt-1 text-amber-800">
+                    Folio actual:{' '}
+                    <strong className="font-mono">
+                      {memoriaAReabrir.folio_factura_arquitecto
+                        ? formatFolioFactura(memoriaAReabrir.folio_factura_arquitecto)
+                        : 'Sin folio'}
+                    </strong>
+                  </p>
+                </div>
+              </div>
+              <ul className="list-disc pl-6 space-y-1 text-amber-800 text-[11px]">
+                <li>La memoria volverá al estado <strong>Borrador</strong> y se abrirá en el asistente.</li>
+                <li>Los gastos, nóminas y anticipos incluidos quedarán desbloqueados para edición.</li>
+                <li>El folio sugerido regresará al valor anterior si esta era la última factura emitida.</li>
+                <li>Se creará automáticamente un <strong>respaldo de seguridad</strong> antes de reabrir.</li>
+                <li>Esta acción quedará registrada en el historial de auditoría del sistema.</li>
+              </ul>
+            </div>
+
+            {errorReabrir && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded text-red-700 text-xs">
+                {errorReabrir}
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2 border-t border-zinc-100">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  setMemoriaAReabrir(null)
+                  setErrorReabrir(null)
+                }}
+                disabled={reabrirMemoriaMutation.isPending}
+              >
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+                onClick={() => reabrirMemoriaMutation.mutate(memoriaAReabrir.id)}
+                disabled={reabrirMemoriaMutation.isPending}
+              >
+                {reabrirMemoriaMutation.isPending ? 'Reabriendo...' : 'Sí, reabrir memoria'}
+              </Button>
+            </div>
+          </div>
+        )}
+      </Dialog>
     </div>
   )
 }

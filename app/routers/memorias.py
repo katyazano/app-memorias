@@ -1,3 +1,4 @@
+import logging
 import re
 import unicodedata
 from urllib.parse import quote
@@ -13,9 +14,15 @@ from app.services.memoria_service import (
     generar_preview,
     guardar_memoria,
     memoria_a_out,
+    reabrir_memoria,
 )
-from app.services.pdf_service import generar_pdf_memoria
+from app.services.pdf_service import (
+    GeneracionPdfError,
+    NavegadorNoEncontradoError,
+    generar_pdf_memoria,
+)
 
+logger = logging.getLogger("app.memorias")
 router = APIRouter(tags=["Memorias"])
 
 
@@ -95,6 +102,12 @@ def cerrar_memoria_endpoint(memoria_id: int, db: Session = Depends(get_db)):
     return memoria_a_out(memoria)
 
 
+@router.post("/memorias/{memoria_id}/reabrir", response_model=MemoriaOut)
+def reabrir_memoria_endpoint(memoria_id: int, db: Session = Depends(get_db)):
+    memoria = reabrir_memoria(db=db, memoria_id=memoria_id)
+    return memoria_a_out(memoria)
+
+
 @router.get("/memorias/{memoria_id}/pdf")
 def exportar_memoria_pdf(
     memoria_id: int,
@@ -118,15 +131,55 @@ def exportar_memoria_pdf(
         base_url = os.environ.get("TEST_SERVER_URL", "http://127.0.0.1:8000")
     try:
         pdf_bytes = generar_pdf_memoria(memoria_id=memoria_id, base_url=base_url)
-    except RuntimeError as e:
+    except NavegadorNoEncontradoError as e:
+        logger.error(f"Navegador no encontrado para PDF de memoria {memoria_id}: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error al generar PDF con el navegador: {e}",
+            detail={
+                "mensaje": (
+                    "No se encontró Microsoft Edge ni Google Chrome en el sistema para generar el PDF automáticamente. "
+                    "Puedes abrir la versión imprimible y usar Ctrl + P para Guardar como PDF."
+                ),
+                "codigo": "navegador_no_encontrado",
+                "rutas_probadas": e.rutas_probadas,
+                "memoria_id": memoria_id,
+            },
+        )
+    except GeneracionPdfError as e:
+        logger.error(
+            f"Fallo al ejecutar navegador ({e.navegador}) para PDF de memoria {memoria_id}: "
+            f"salida={e.codigo_salida}, stderr={e.stderr}"
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "mensaje": f"El navegador se encontró ({e.navegador}) pero falló al generar el PDF: {e.detalle}",
+                "codigo": "error_generacion_pdf",
+                "navegador": e.navegador,
+                "codigo_salida": e.codigo_salida,
+                "stderr": e.stderr,
+                "memoria_id": memoria_id,
+            },
+        )
+    except RuntimeError as e:
+        logger.error(f"Error de runtime al generar PDF para memoria {memoria_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={
+                "mensaje": f"Error al generar PDF con el navegador: {e}",
+                "codigo": "error_runtime_pdf",
+                "memoria_id": memoria_id,
+            },
         )
     except Exception as e:
+        logger.exception(f"Error inesperado al generar PDF para memoria {memoria_id}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error inesperado al generar PDF: {e}",
+            detail={
+                "mensaje": f"Error inesperado al generar PDF: {e}",
+                "codigo": "error_inesperado_pdf",
+                "memoria_id": memoria_id,
+            },
         )
 
     nombre_ascii = unicodedata.normalize("NFKD", nombre_archivo_limpio).encode("ascii", "ignore").decode("ascii")
@@ -138,7 +191,8 @@ def exportar_memoria_pdf(
         media_type="application/pdf",
         headers={
             "Content-Disposition": content_disp_pdf,
-            "Access-Control-Expose-Headers": "Content-Disposition",
+            "X-PDF-Generation-Method": "edge-cli-no-header-footer",
+            "Access-Control-Expose-Headers": "Content-Disposition, X-PDF-Generation-Method",
         },
     )
 

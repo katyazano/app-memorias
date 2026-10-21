@@ -1,8 +1,11 @@
 """Servicio de cálculo, generación, persistencia y cierre de memorias."""
 import json
+import logging
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
 
 from fastapi import HTTPException, status
 from sqlalchemy import func
@@ -18,6 +21,7 @@ from app.models import (
     Obra,
     OrigenGasto,
     PagoRaya,
+    RegistroAuditoria,
 )
 from app.schemas import (
     MemoriaGuardar,
@@ -814,6 +818,124 @@ def cerrar_memoria(db: Session, memoria_id: int) -> Memoria:
     return memoria
 
 
+def reabrir_memoria(db: Session, memoria_id: int) -> Memoria:
+    """Reabre una memoria cerrada:
+    - SOLO la última memoria cerrada de la obra puede reabrirse (para proteger los acumulados).
+    - Vuelve a estado BORRADOR y libera sus renglones para edición.
+    - El folio sugerido de factura del arquitecto regresa si fue el último registrado.
+    - Genera un respaldo automático preventivo antes de reabrir.
+    - Registra una entrada en la tabla y log de auditoría (fecha, acción, memoria, detalles).
+    """
+    memoria = db.query(Memoria).filter(Memoria.id == memoria_id).first()
+    if not memoria:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Memoria no encontrada.")
+    if memoria.estado != EstadoMemoria.CERRADA:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Solo se pueden reabrir memorias que se encuentren cerradas.",
+        )
+
+    # Validar que sea estrictamente la ÚLTIMA memoria cerrada de esta obra
+    memoria_posterior = (
+        db.query(Memoria)
+        .filter(
+            Memoria.obra_id == memoria.obra_id,
+            Memoria.estado == EstadoMemoria.CERRADA,
+            Memoria.numero > memoria.numero,
+        )
+        .order_by(Memoria.numero.desc())
+        .first()
+    )
+    if memoria_posterior:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"No se puede reabrir la Memoria #{memoria.numero} porque existen memorias cerradas posteriores "
+                f"(Memoria #{memoria_posterior.numero}). Solo la última memoria cerrada puede reabrirse "
+                f"para preservar la consistencia de los acumulados contables."
+            ),
+        )
+
+    # 1. Respaldo automático preventivo antes de reabrir
+    try:
+        from app.services.backup_service import crear_respaldo_seguro
+        zip_path, _ = crear_respaldo_seguro(db, origen="reapertura_memoria")
+        logger.info(f"Respaldo preventivo automático generado antes de reabrir memoria #{memoria_id}: {zip_path}")
+    except Exception as e:
+        logger.error(f"Fallo al crear respaldo preventivo antes de reabrir memoria #{memoria_id}: {e}")
+
+    # 2. Revertir folio sugerido si fue el último folio registrado en configuración
+    folio_arquitecto = (memoria.folio_factura_arquitecto or "").strip()
+    if folio_arquitecto:
+        try:
+            folio_int = int(folio_arquitecto)
+            conf = db.query(Configuracion).filter(Configuracion.clave == "ultimo_folio_factura_arquitecto").first()
+            if conf and conf.valor.strip():
+                try:
+                    conf_int = int(conf.valor.strip())
+                except ValueError:
+                    conf_int = 0
+
+                if conf_int == folio_int:
+                    # Encontrar el folio numérico más alto entre las demás memorias cerradas
+                    otras_cerradas = (
+                        db.query(Memoria)
+                        .filter(Memoria.id != memoria.id, Memoria.estado == EstadoMemoria.CERRADA)
+                        .all()
+                    )
+                    max_otro_folio = 0
+                    for oc in otras_cerradas:
+                        if oc.folio_factura_arquitecto:
+                            try:
+                                f_num = int(str(oc.folio_factura_arquitecto).strip())
+                                if f_num > max_otro_folio:
+                                    max_otro_folio = f_num
+                            except ValueError:
+                                pass
+
+                    if max_otro_folio > 0:
+                        conf.valor = str(max_otro_folio)
+                    else:
+                        conf.valor = str(max(0, folio_int - 1))
+                    logger.info(f"Folio sugerido revertido en configuración de {folio_int} a {conf.valor}")
+        except ValueError:
+            pass
+
+    # 3. Revertir estado a borrador y limpiar fecha de cierre
+    memoria.estado = EstadoMemoria.BORRADOR
+    memoria.cerrada_at = None
+
+    # Limpiar cerrada_at del snapshot
+    try:
+        snapshot = json.loads(memoria.snapshot_json) if memoria.snapshot_json else {}
+        snapshot.pop("cerrada_at", None)
+        memoria.snapshot_json = json.dumps(snapshot, ensure_ascii=False)
+    except Exception:
+        pass
+
+    # 4. Registro de auditoría (fecha, acción, memoria, detalles)
+    ahora = datetime.now()
+    obra = memoria.obra
+    obra_nom = obra.nombre if obra else f"Obra #{memoria.obra_id}"
+    detalles_audit = (
+        f"Reapertura de Memoria #{memoria.numero} (Folio Factura: '{folio_arquitecto or 'Sin folio'}') "
+        f"de la obra '{obra_nom}' (ID {memoria.obra_id}). Estado revertido a borrador."
+    )
+    reg_audit = RegistroAuditoria(
+        fecha=ahora,
+        accion="reapertura_memoria",
+        memoria_id=memoria.id,
+        obra_id=memoria.obra_id,
+        detalles=detalles_audit,
+    )
+    db.add(reg_audit)
+    logger.info(f"[AUDITORIA] {detalles_audit}")
+
+    db.flush()
+    db.commit()
+    return memoria
+
+
 def to_decimal(val: Any) -> Decimal:
     if val is None or val == "":
         return Decimal("0.00")
@@ -890,11 +1012,17 @@ def memoria_a_out(memoria: Memoria) -> MemoriaOut:
     f_emision_raw = data.get("fecha_emision")
     f_emision = date.fromisoformat(f_emision_raw) if f_emision_raw else memoria.fecha_emision
     ciudad = data.get("ciudad") or memoria.ciudad or "Zapopan, Jalisco"
-    importe_fac_txt = data.get("importe_factura_texto") or totales.get("importe_factura_texto") or (
-        numero_a_letras_mxn(Decimal(totales["importe_factura"])) if "importe_factura" in totales else None
+    importe_fac_txt = (
+        data.get("importe_factura_texto")
+        or totales.get("importe_factura_texto")
+        or (numero_a_letras_mxn(Decimal(totales["importe_factura"])) if "importe_factura" in totales else "")
+        or ""
     )
-    gastado_txt = data.get("gastado_a_la_fecha_texto") or totales.get("gastado_a_la_fecha_texto") or (
-        numero_a_letras_mxn(Decimal(totales["gastado_a_la_fecha"])) if "gastado_a_la_fecha" in totales else None
+    gastado_txt = (
+        data.get("gastado_a_la_fecha_texto")
+        or totales.get("gastado_a_la_fecha_texto")
+        or (numero_a_letras_mxn(Decimal(totales["gastado_a_la_fecha"])) if "gastado_a_la_fecha" in totales else "")
+        or ""
     )
 
     totales["importe_factura_texto"] = importe_fac_txt

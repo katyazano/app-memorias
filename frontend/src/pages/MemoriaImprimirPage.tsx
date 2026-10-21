@@ -166,7 +166,7 @@ export function MemoriaImprimirPage() {
         @media print {
           @page {
             size: letter portrait;
-            margin: 10mm;
+            margin: 12mm;
           }
           body {
             -webkit-print-color-adjust: exact;
@@ -272,14 +272,33 @@ export function MemoriaImprimirPage() {
         </div>
 
         {errorDescarga && (
-          <div className="p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded flex items-center justify-between">
-            <span>{errorDescarga}</span>
-            <button
-              onClick={() => setErrorDescarga(null)}
-              className="text-red-900 font-bold ml-3 text-sm hover:underline"
-            >
-              ×
-            </button>
+          <div className="p-3 bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-lg flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+            <div className="space-y-1">
+              <p className="font-semibold text-amber-950 flex items-center gap-1.5">
+                <Printer className="w-4 h-4 text-amber-700" />
+                No se pudo generar el archivo PDF automáticamente desde el servidor
+              </p>
+              <p className="text-amber-800">
+                {errorDescarga} — Puedes obtener tu PDF de inmediato: presiona <strong className="text-amber-950 font-bold">Ctrl + P</strong> y elige la opción <strong className="text-amber-950 font-bold">"Guardar como PDF"</strong> (tamaño Carta).
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <Button
+                size="sm"
+                onClick={() => window.print()}
+                className="bg-amber-700 hover:bg-amber-800 text-white text-xs inline-flex items-center gap-1.5"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                <span>Guardar como PDF (Ctrl+P)</span>
+              </Button>
+              <button
+                onClick={() => setErrorDescarga(null)}
+                className="text-amber-800 hover:text-amber-950 font-bold px-2 py-1 text-sm rounded hover:bg-amber-100"
+                title="Cerrar aviso"
+              >
+                ×
+              </button>
+            </div>
           </div>
         )}
       </div>

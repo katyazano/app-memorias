@@ -79,12 +79,12 @@ def test_concepto_cantidad_unidad_descripcion():
     assert d.concepto_sugerido == "10 Pieza Varilla 3/8"
 
 
-def test_concepto_varios_y_truncado_a_120():
+def test_concepto_varios_y_truncado_a_80_y_otros():
     cs = [f'<cfdi:Concepto Cantidad="2.500000" Unidad="Kilo" Descripcion="Material numero {i} " />' for i in range(20)]
     d = extract_cfdi_xml(cfdi(conceptos=cs))
-    assert len(d.concepto_sugerido) <= 120
-    assert d.concepto_sugerido.endswith("...")
-    assert d.concepto_sugerido.startswith("2.5 Kilo Material numero 0;")
+    assert len(d.concepto_sugerido) <= 80
+    assert d.concepto_sugerido.endswith("Y OTROS")
+    assert d.concepto_sugerido.startswith("2.5 Kilo Material numero 0, 2.5 Kilo Material numero 1")
 
 
 def test_resumir_concepto_vacio():
