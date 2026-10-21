@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
-APP_VERSION: str = "2.0.0+20261020.0356"
+APP_VERSION: str = "2.0.0+20261020.1805"
 
 IS_FROZEN: bool = getattr(sys, "frozen", False)
 
